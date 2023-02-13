@@ -546,7 +546,7 @@ if __name__ == "__main__":
         photm, true_sed = get_fake_photometry(grid, filters, n=10)
 
     # Intialise the Hypercube
-    cube_path = "../hypercube_<rank>.hdf5"
+    cube_path = sys.argv[1] + "/hypercube_<rank>.hdf5"
 
     t = time.time()
     hcube = create_hypercube(grid, cube_path)
