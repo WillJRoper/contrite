@@ -398,9 +398,11 @@ def create_hypercube(grid, out_path):
 
         # Should we report what we have done?
         if ind % 10000 == 0:
-            print("Rank %d done: %d of %d"
+            print("Rank %d done: %d of %d (%.2f)"
                   % (rank, ind - rank_bins[rank],
-                     rank_bins[rank + 1] - rank_bins[rank]))
+                     rank_bins[rank + 1] - rank_bins[rank],
+                     (ind - rank_bins[rank]) /
+                     (rank_bins[rank + 1] - rank_bins[rank]) * 100) + "%")
 
         # Define the functional form of the star formation and
         # metal enrichment histories
