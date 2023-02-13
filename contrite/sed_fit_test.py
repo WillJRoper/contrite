@@ -461,6 +461,7 @@ def create_hypercube(grid, out_path):
         # Store the cube as a dataset
         for a in attrs:
             arr = getattr(hcube, a)
+            print(a, arr)
             if isinstance(arr, np.ndarray):
                 hdf.create_dataset(a, data=arr, dtype=arr.dtype,
                                    shape=arr.shape, compression="gzip")
