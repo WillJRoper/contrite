@@ -460,7 +460,7 @@ def create_hypercube(grid, out_path):
 
         # Store the cube as a dataset
         for a in attrs:
-            if a == "hdf":
+            if a == "hdf" or a == "props":
                 continue
             arr = getattr(hcube, a)
             print("Writing:", a)
