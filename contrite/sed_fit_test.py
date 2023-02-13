@@ -344,107 +344,107 @@ class HyperCube():
 
 def create_hypercube(grid, out_path):
 
-    # Get useful constants
-    nlam = grid.lam.size
-    nZ = grid.log10metallicities.size
-    nage = grid.log10ages.size
-    ntau = 50
+    # # Get useful constants
+    # nlam = grid.lam.size
+    # nZ = grid.log10metallicities.size
+    # nage = grid.log10ages.size
+    # ntau = 50
 
-    # Note: this structure is (max_age, peaks, taus, Zs, wavelength)
+    # # Note: this structure is (max_age, peaks, taus, Zs, wavelength)
 
-    # Define each dimension of the cube
-    max_ages = grid.log10ages
-    peaks = grid.log10ages
-    taus = np.linspace(0.1, 1, ntau)
-    metals = grid.log10metallicities
+    # # Define each dimension of the cube
+    # max_ages = grid.log10ages
+    # peaks = grid.log10ages
+    # taus = np.linspace(0.1, 1, ntau)
+    # metals = grid.log10metallicities
 
-    # Set up hypercube object
-    props  = {"max_age": max_ages, "peak": peaks, "tau": taus,
-              "metallicity": metals}
-    hcube = HyperCube(props=props, lam=grid.lam)
+    # # Set up hypercube object
+    # props  = {"max_age": max_ages, "peak": peaks, "tau": taus,
+    #           "metallicity": metals}
+    # hcube = HyperCube(props=props, lam=grid.lam)
 
-    # Create the list of parameters that describe the hypercube ready for
-    # parallelising
-    params = []
-    for i, max_age in enumerate(max_ages):
-        for j, peak in enumerate(peaks):
+    # # Create the list of parameters that describe the hypercube ready for
+    # # parallelising
+    # params = []
+    # for i, max_age in enumerate(max_ages):
+    #     for j, peak in enumerate(peaks):
 
-            # Skip peaks beyond the max age
-            if peak >= max_age:
-                continue
+    #         # Skip peaks beyond the max age
+    #         if peak >= max_age:
+    #             continue
             
-            for k, tau in enumerate(taus):
-                for l, metal in enumerate(metals):
+    #         for k, tau in enumerate(taus):
+    #             for l, metal in enumerate(metals):
 
-                    params.append([(i, j, k, l), (max_age, peak, tau, metal)])
+    #                 params.append([(i, j, k, l), (max_age, peak, tau, metal)])
 
-    # Get the range for each rank
-    if rank == 0:
-        print("Distributing %d spectra over %d ranks" % (len(params), nranks))
-    rank_bins = np.linspace(0, len(params), nranks + 1, dtype=int)
+    # # Get the range for each rank
+    # if rank == 0:
+    #     print("Distributing %d spectra over %d ranks" % (len(params), nranks))
+    # rank_bins = np.linspace(0, len(params), nranks + 1, dtype=int)
 
-    # Get this ranks indices
-    my_inds = np.arange(rank_bins[rank], rank_bins[rank + 1], 1, dtype=int)
+    # # Get this ranks indices
+    # my_inds = np.arange(rank_bins[rank], rank_bins[rank + 1], 1, dtype=int)
 
-    # Loop over parameters making SEDs
-    spectra = []
-    for ind in my_inds:
+    # # Loop over parameters making SEDs
+    # spectra = []
+    # for ind in my_inds:
 
-        (i, j, k, l), (max_age, peak, tau, metal) = params[ind]
+    #     (i, j, k, l), (max_age, peak, tau, metal) = params[ind]
 
-        sfh_props = {'peak_age': 10 ** peak * Myr, "tau": tau,
-                     "max_age": 10 ** max_age * Myr}
-        Z_p = {'log10Z': metal}
+    #     sfh_props = {'peak_age': 10 ** peak * Myr, "tau": tau,
+    #                  "max_age": 10 ** max_age * Myr}
+    #     Z_p = {'log10Z': metal}
 
-        # Should we report what we have done?
-        if (ind - rank_bins[rank]) % 10000 == 0:
-            print("Rank %d done: %d of %d (%.2f)"
-                  % (rank, ind - rank_bins[rank],
-                     rank_bins[rank + 1] - rank_bins[rank],
-                     (ind - rank_bins[rank]) /
-                     (rank_bins[rank + 1] - rank_bins[rank]) * 100) + "%")
+    #     # Should we report what we have done?
+    #     if (ind - rank_bins[rank]) % 10000 == 0:
+    #         print("Rank %d done: %d of %d (%.2f)"
+    #               % (rank, ind - rank_bins[rank],
+    #                  rank_bins[rank + 1] - rank_bins[rank],
+    #                  (ind - rank_bins[rank]) /
+    #                  (rank_bins[rank + 1] - rank_bins[rank]) * 100) + "%")
 
-        # Define the functional form of the star formation and
-        # metal enrichment histories
-        sfh = SFH.LogNormal(sfh_props)
+    #     # Define the functional form of the star formation and
+    #     # metal enrichment histories
+    #     sfh = SFH.LogNormal(sfh_props)
         
-        # Constant metallicity
-        Zh = ZH.deltaConstant(Z_p)
+    #     # Constant metallicity
+    #     Zh = ZH.deltaConstant(Z_p)
                     
-        # Get the 2D star formation and metal enrichment history
-        # for the given SPS grid. This is (age, Z).
-        sfzh = generate_sfzh(grid.log10ages, grid.metallicities,
-                             sfh, Zh, stellar_mass=1.0)
+    #     # Get the 2D star formation and metal enrichment history
+    #     # for the given SPS grid. This is (age, Z).
+    #     sfzh = generate_sfzh(grid.log10ages, grid.metallicities,
+    #                          sfh, Zh, stellar_mass=1.0)
         
-        # Make a galaxy from this SFZH
-        galaxy = Galaxy(sfzh)
+    #     # Make a galaxy from this SFZH
+    #     galaxy = Galaxy(sfzh)
                     
-        # Compute SED
-        sed = galaxy.get_stellar_spectra(grid)
-        sed.get_fnu0()
+    #     # Compute SED
+    #     sed = galaxy.get_stellar_spectra(grid)
+    #     sed.get_fnu0()
 
-        # Store the results
-        spectra.append([(i, j, k, l), (max_age, peak, tau, metal),
-                        np.float32(sed._fnu)])
+    #     # Store the results
+    #     spectra.append([(i, j, k, l), (max_age, peak, tau, metal),
+    #                     np.float32(sed._fnu)])
 
-    print("Rank %d finished %d spectra"
-          % (rank, rank_bins[rank + 1] - rank_bins[rank]))
+    # print("Rank %d finished %d spectra"
+    #       % (rank, rank_bins[rank + 1] - rank_bins[rank]))
 
-    # Create the HDF5 file
-    hdf = h5py.File(cube_path.replace("<rank>", str(rank)), "w")
+    # # Create the HDF5 file
+    # hdf = h5py.File(cube_path.replace("<rank>", str(rank)), "w")
 
-    # Write out this ranks results
-    for spec_lst in spectra:
+    # # Write out this ranks results
+    # for spec_lst in spectra:
 
-        # Extract the contents
-        (i, j, k, l), (max_age, peak, tau, metal), spec = spec_lst
+    #     # Extract the contents
+    #     (i, j, k, l), (max_age, peak, tau, metal), spec = spec_lst
 
-        # Make a group for this spectra
-        hdf.create_dataset("%d_%d_%d_%d" % (i, j, k, l),
-                           data=spec, dtype=spec.dtype,
-                           shape=spec.shape, compression="gzip")
+    #     # Make a group for this spectra
+    #     hdf.create_dataset("%d_%d_%d_%d" % (i, j, k, l),
+    #                        data=spec, dtype=spec.dtype,
+    #                        shape=spec.shape, compression="gzip")
 
-    hdf.close()
+    # hdf.close()
 
     comm.barrier()
 
@@ -456,11 +456,11 @@ def create_hypercube(grid, out_path):
 
         # Get the attributes of the cube
         attrs = [a for a in dir(hcube) if not a.startswith('__')
-                 and not callable(getattr(obj, a))]
+                 and not callable(getattr(hcube, a))]
 
         # Store the cube as a dataset
         for a in attrs:
-            arr = getattr(self, a)
+            arr = getattr(hcube, a)
             if isinstance(arr, np.ndarray):
                 hdf.create_dataset(a, data=arr, dtype=arr.dtype,
                                    shape=arr.shape, compression="gzip")
