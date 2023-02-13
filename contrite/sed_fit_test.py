@@ -539,12 +539,12 @@ if __name__ == "__main__":
     grid_dir = "/cosma/home/dp004/dc-rope1/cosma8/CONTRITE/data/"
     grid = Grid(grid_name, grid_dir=grid_dir)
 
-    if rank == 0:
-        filter_codes = ["JWST/NIRCam.F090W", "JWST/NIRCam.F150W",
-                        "JWST/NIRCam.F200W", "JWST/NIRCam.F277W",
-                        "JWST/NIRCam.F444W"]
-        filters = Filters(filter_codes=filter_codes, new_lam=grid.lam)
-        photm, true_sed = get_fake_photometry(grid, filters, n=10)
+    # if rank == 0:
+    #     filter_codes = ["JWST/NIRCam.F090W", "JWST/NIRCam.F150W",
+    #                     "JWST/NIRCam.F200W", "JWST/NIRCam.F277W",
+    #                     "JWST/NIRCam.F444W"]
+    #     filters = Filters(filter_codes=filter_codes, new_lam=grid.lam)
+    #     photm, true_sed = get_fake_photometry(grid, filters, n=10)
 
     # Intialise the Hypercube
     cube_path = sys.argv[1] + "/hypercube_<rank>.hdf5"
