@@ -338,30 +338,30 @@ class HyperCube():
         ax.set_xlabel('$\lambda / [\AA]$')
         ax.set_ylabel('$F_{\mathrm{nu}}/$ [nJy]')
     
-        fig.savefig("../hypercube_spectra.png", bbox_inches="tight", dpi=100)
+        fig.savefig("hypercube_spectra.png", bbox_inches="tight", dpi=100)
         plt.close(fig)
         
 
 def create_hypercube(grid, out_path):
 
-    # # Get useful constants
-    # nlam = grid.lam.size
-    # nZ = grid.log10metallicities.size
-    # nage = grid.log10ages.size
-    # ntau = 50
+    # Get useful constants
+    nlam = grid.lam.size
+    nZ = grid.log10metallicities.size
+    nage = grid.log10ages.size
+    ntau = 50
 
-    # # Note: this structure is (max_age, peaks, taus, Zs, wavelength)
+    # Note: this structure is (max_age, peaks, taus, Zs, wavelength)
 
-    # # Define each dimension of the cube
-    # max_ages = grid.log10ages
-    # peaks = grid.log10ages
-    # taus = np.linspace(0.1, 1, ntau)
-    # metals = grid.log10metallicities
+    # Define each dimension of the cube
+    max_ages = grid.log10ages
+    peaks = grid.log10ages
+    taus = np.linspace(0.1, 1, ntau)
+    metals = grid.log10metallicities
 
-    # # Set up hypercube object
-    # props  = {"max_age": max_ages, "peak": peaks, "tau": taus,
-    #           "metallicity": metals}
-    # hcube = HyperCube(props=props, lam=grid.lam)
+    # Set up hypercube object
+    props  = {"max_age": max_ages, "peak": peaks, "tau": taus,
+              "metallicity": metals}
+    hcube = HyperCube(props=props, lam=grid.lam)
 
     # # Create the list of parameters that describe the hypercube ready for
     # # parallelising
@@ -554,9 +554,12 @@ if __name__ == "__main__":
     print("Hypercube creation took:", time.time() - t)
 
     if rank == 0:
+
+        # Intialise the Hypercube
+        cube_path = sys.argv[1] + "/hypercube.hdf5"
         
         t = time.time()
-        hcube = HyperCube(cube_path)
+        hcube = HyperCube(cube_path=cube_path)
         print("Hypercube reading took:", time.time() - t)
 
         hcube.plot_dist()
