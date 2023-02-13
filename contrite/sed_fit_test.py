@@ -321,6 +321,7 @@ class HyperCube():
         ax = fig.add_subplot(111)
 
         for i, max_age in enumerate(self.max_age):
+            print("Currently plotting for log_10(max_age)=%.2f" % max_age)
             for j, peak in enumerate(self.peak):
 
                 # Skip peaks beyond the max age
