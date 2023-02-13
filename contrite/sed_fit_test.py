@@ -253,7 +253,7 @@ def get_spectra(peaks, taus, metallicity, masses, k):
 
 class HyperCube():
 
-    def __init__(self, props=None, cube=None, lam=None, cube_path=None):
+    def __init__(self, props=None, lam=None, cube_path=None):
 
         # Are we making new grid or reading an existing one?
         if cube_path is not None:
@@ -265,9 +265,7 @@ class HyperCube():
             self.props = props
             for name, prop in props.items():
                 setattr(self, name, prop)
-
-            self.cube = cube
-
+                
             self.lam = lam
 
     def get_value(self):
@@ -278,38 +276,38 @@ class HyperCube():
 
         return cube[gird_tup]
 
-    def load_hypercube(self, cube_path):
+    # def load_hypercube(self, cube_path):
 
-        # Open the file
-        hdf = h5py.File(cube_path, "r")
+    #     # Open the file
+    #     hdf = h5py.File(cube_path, "r")
 
-        # Populate this cube from the file
-        for key in hdf.keys():
-            setattr(self, key, hdf[key][...])
-        for key in hdf.attrs.keys():
-            setattr(self, key, hdf.attrs[key])
+    #     # Populate this cube from the file
+    #     for key in hdf.keys():
+    #         setattr(self, key, hdf[key][...])
+    #     for key in hdf.attrs.keys():
+    #         setattr(self, key, hdf.attrs[key])
 
-        hdf.close()
+    #     hdf.close()
 
-    def write_hypercube(self, cube_path):
+    # def write_hypercube(self, cube_path):
 
-        # Create the HDF5 file
-        hdf = h5py.File(cube_path, "w")
+    #     # Create the HDF5 file
+    #     hdf = h5py.File(cube_path, "w")
 
-        # Get the attributes of the cube
-        attrs = [a for a in dir(obj) if not a.startswith('__')
-                 and not callable(getattr(obj, a))]
+    #     # Get the attributes of the cube
+    #     attrs = [a for a in dir(obj) if not a.startswith('__')
+    #              and not callable(getattr(obj, a))]
 
-        # Store the cube as a dataset
-        for a in attrs:
-            arr = getattr(self, a)
-            if isinstance(arr, np.ndarray):
-                hdf.create_dataset(a, data=arr, dtype=arr.dtype,
-                                   shape=arr.shape, compression="gzip")
-            else:
-                hdf.attrs[a] = arr
+    #     # Store the cube as a dataset
+    #     for a in attrs:
+    #         arr = getattr(self, a)
+    #         if isinstance(arr, np.ndarray):
+    #             hdf.create_dataset(a, data=arr, dtype=arr.dtype,
+    #                                shape=arr.shape, compression="gzip")
+    #         else:
+    #             hdf.attrs[a] = arr
 
-        hdf.close
+    #     hdf.close
 
 
     def plot_dist(self):
@@ -345,10 +343,7 @@ def create_hypercube(grid, out_path):
     nZ = grid.log10metallicities.size
     nage = grid.log10ages.size
 
-    # Set up the hypercube array
     # Note: this structure is (max_age, peaks, taus, Zs, wavelength)
-    if rank == 0:
-        cube = np.zeros((nage, nage, nage, nZ, nlam))
 
     # Define each dimension of the cube
     max_ages = grid.log10ages
@@ -357,10 +352,9 @@ def create_hypercube(grid, out_path):
     metals = grid.log10metallicities
 
     # Set up hypercube object
-    if rank == 0:
-        props  = {"max_age": max_ages, "peak": peaks, "tau": taus,
-                  "metallicity": metals}
-        hcube = HyperCube(props=props, cube=cube, lam=grid.lam)
+    props  = {"max_age": max_ages, "peak": peaks, "tau": taus,
+              "metallicity": metals}
+    hcube = HyperCube(props=props, lam=grid.lam)
 
     # Create the list of parameters that describe the hypercube ready for
     # parallelising
@@ -420,29 +414,43 @@ def create_hypercube(grid, out_path):
         sed.get_fnu0()
 
         # Store the results
-        spectra.append([(i, j, k, l), sed._fnu])
+        spectra.append([(i, j, k, l), (max_age, peak, tau, metal), sed._fnu])
 
     print("Rank %d finished %d spectra"
           % (rank, rank_bins[rank + 1] - rank_bins[rank]))
 
-    # Collect the spectra
-    collection = comm.gather(spectra, root=0)
+    # Create the HDF5 file
+    hdf = h5py.File(cube_path.replace("<rank>", str(rank)), "w")
 
-    # Store spectra in the hypercube
-    if rank == 0:
+    # Get the attributes of the cube
+    attrs = [a for a in dir(hcube) if not a.startswith('__')
+             and not callable(getattr(obj, a))]
 
-        for lst in collection:
-            for spec_tup in lst:
+    # Store the cube as a dataset
+    for a in attrs:
+        arr = getattr(self, a)
+        if isinstance(arr, np.ndarray):
+            hdf.create_dataset(a, data=arr, dtype=arr.dtype,
+                               shape=arr.shape, compression="gzip")
+        else:
+            hdf.attrs[a] = arr
 
-                # Extract the results for this spectra
-                (i, j, k, l) = spec_tup[0]
-                spec = spec_tup[1]
+    # Write out this ranks results
+    for spec_lst in spectra:
 
-                # Store this spectra
-                hcube.cube[i, j, k, l, :] = sed.fnu
+        # Extract the contents
+        (i, j, k, l), (max_age, peak, tau, metal), spec = spec_lst
 
-        # Write out the hypercube
-        hcube.write_hypercube(out_path)
+        # Make a group for this spectra
+        grp = hdf.create_group("%d_%d_%d_%d" % (i, j, k, l))
+        grp.attrs["max_age"] = max_age
+        grp.attrs["peak_age"] = peak
+        grp.attrs["tau"] = tau
+        grp.attrs["metallicity"] = metal
+        grp.create_dataset("spectra", data=spec, dtype=spec.dtype,
+                           shape=spec.shape)
+
+    hdf.close()
 
     # # Loop over cube dimensions populating SEDs
     # for i, max_age in enumerate(max_ages):
@@ -502,7 +510,7 @@ if __name__ == "__main__":
         photm, true_sed = get_fake_photometry(grid, filters, n=10)
 
     # Intialise the Hypercube
-    cube_path = "../hypercube.hdf5"
+    cube_path = "../hypercube_<rank>.hdf5"
 
     t = time.time()
     hcube = create_hypercube(grid, cube_path)
