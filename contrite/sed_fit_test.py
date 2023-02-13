@@ -371,8 +371,6 @@ def create_hypercube(grid, out_path):
             # Skip peaks beyond the max age
             if peak >= max_age:
                 continue
-
-            # 
             
             for k, tau in enumerate(taus):
                 for l, metal in enumerate(metals):
@@ -398,7 +396,7 @@ def create_hypercube(grid, out_path):
         Z_p = {'log10Z': metal}
 
         # Should we report what we have done?
-        if ind % 10000 == 0:
+        if ind - rank_bins[rank] % 10000 == 0:
             print("Rank %d done: %d of %d (%.2f)"
                   % (rank, ind - rank_bins[rank],
                      rank_bins[rank + 1] - rank_bins[rank],
@@ -424,9 +422,6 @@ def create_hypercube(grid, out_path):
         sed = galaxy.get_stellar_spectra(grid)
         sed.get_fnu0()
 
-        if np.sum(sed._fnu) == 0:
-            print("nan result:", (i, j, k, l), (max_age, peak, tau, metal))
-
         # Store the results
         spectra.append([(i, j, k, l), (max_age, peak, tau, metal),
                         np.float32(sed._fnu)])
@@ -449,6 +444,8 @@ def create_hypercube(grid, out_path):
                            shape=spec.shape, compression="gzip")
 
     hdf.close()
+
+    comm.barrier()
 
     if rank == 0:
 
