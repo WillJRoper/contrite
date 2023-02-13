@@ -320,7 +320,7 @@ class HyperCube():
             for j, peak in enumerate(self.peak):
 
                 # Skip peaks beyond the max age
-                if peak > max_age:
+                if peak >= max_age:
                     continue
             
                 for k, tau in enumerate(self.tau):
@@ -348,7 +348,7 @@ def create_hypercube(grid, out_path):
     # Define each dimension of the cube
     max_ages = grid.log10ages
     peaks = grid.log10ages
-    taus = np.linspace(0, 1, nage)
+    taus = np.linspace(10**-5, 1, nage)
     metals = grid.log10metallicities
 
     # Set up hypercube object
@@ -363,7 +363,7 @@ def create_hypercube(grid, out_path):
         for j, peak in enumerate(peaks):
 
             # Skip peaks beyond the max age
-            if peak > max_age:
+            if peak >= max_age:
                 continue
             
             for k, tau in enumerate(taus):
