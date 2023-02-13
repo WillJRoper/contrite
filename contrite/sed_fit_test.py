@@ -346,13 +346,14 @@ def create_hypercube(grid, out_path):
     nlam = grid.lam.size
     nZ = grid.log10metallicities.size
     nage = grid.log10ages.size
+    ntau = 50
 
     # Note: this structure is (max_age, peaks, taus, Zs, wavelength)
 
     # Define each dimension of the cube
     max_ages = grid.log10ages
     peaks = grid.log10ages
-    taus = np.linspace(10**-4, 1, nage)
+    taus = np.linspace(10**-4, 1, ntau)
     metals = grid.log10metallicities
 
     # Set up hypercube object
@@ -394,10 +395,9 @@ def create_hypercube(grid, out_path):
         Z_p = {'log10Z': metal}
 
         # Should we report what we have done?
-        if j == 0 and k == 0 and l == 0:
-            print("Rank %d is computing spectra for log10(max_age)[%d]=%.2f, "
-                  "Done: %d of %d"
-                  % (rank, i, max_age, ind - rank_bins[rank],
+        if ind % 10000 == 0:
+            print("Rank %d done: %d of %d"
+                  % (rank, ind - rank_bins[rank],
                      rank_bins[rank + 1] - rank_bins[rank]))
 
         # Define the functional form of the star formation and
@@ -419,7 +419,7 @@ def create_hypercube(grid, out_path):
         sed = galaxy.get_stellar_spectra(grid)
         sed.get_fnu0()
 
-        if np.isnan(np.sum(sed._fnu)):
+        if np.sum(sed._fnu) == 0:
             print("nan result:", (i, j, k, l), (max_age, peak, tau, metal))
 
         # Store the results
@@ -465,7 +465,7 @@ def create_hypercube(grid, out_path):
                 hdf.attrs[a] = arr
 
         # Create the virtual dataset for the cube
-        virtual_cube = h5py.VirtualLayout(shape=(nage, nage, nage, nZ, nlam),
+        virtual_cube = h5py.VirtualLayout(shape=(nage, nage, ntau, nZ, nlam),
                                           dtype=np.float32)
 
         # Loop over rank files and include their spectra in the virtual cube
