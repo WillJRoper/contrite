@@ -269,7 +269,7 @@ class HyperCube():
             self.lam = lam
 
         # Define an attribute to store the hdf5 object 
-        self.hdf
+        self.hdf = None
 
     def get_value(self):
 
