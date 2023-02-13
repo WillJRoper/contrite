@@ -484,6 +484,10 @@ def create_hypercube(grid, out_path):
             for key in rank_hdf.keys():
                 print(key)
                 i, j, k, l = key.split("_")
+                i = int(i)
+                j = int(j)
+                k = int(k)
+                l = int(l)
                 virtual_spectra = h5py.VirtualSource(rank_hdf[key])
                 virtual_cube[i, j, k, l, :] = virtual_spectra
 
