@@ -448,7 +448,7 @@ def create_hypercube(grid, out_path):
         grp.attrs["tau"] = tau
         grp.attrs["metallicity"] = metal
         grp.create_dataset("spectra", data=spec, dtype=spec.dtype,
-                           shape=spec.shape)
+                           shape=spec.shape, compression="gzip")
 
     hdf.close()
 
