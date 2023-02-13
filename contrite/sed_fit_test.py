@@ -352,7 +352,7 @@ def create_hypercube(grid, out_path):
     # Define each dimension of the cube
     max_ages = grid.log10ages
     peaks = grid.log10ages
-    taus = np.linspace(10**-5, 1, nage)
+    taus = np.linspace(10**-4, 1, nage)
     metals = grid.log10metallicities
 
     # Set up hypercube object
@@ -397,7 +397,7 @@ def create_hypercube(grid, out_path):
         if j == 0 and k == 0 and l == 0:
             print("Rank %d is computing spectra for log10(max_age)[%d]=%.2f, "
                   "Done: %d of %d"
-                  % (rank, i, max_age, ind,
+                  % (rank, i, max_age, ind - rank_bins[rank],
                      rank_bins[rank + 1] - rank_bins[rank]))
 
         # Define the functional form of the star formation and
