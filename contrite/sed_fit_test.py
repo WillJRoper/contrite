@@ -489,8 +489,9 @@ if __name__ == "__main__":
 
     # Define the grid
     grid_name = "bc03_chabrier03-0.1,100"
-    grid_dir = "/Users/willroper/Documents/University/Synthesizer" \
-        "/synthesizer_data/grids/"
+    # grid_dir = "/Users/willroper/Documents/University/Synthesizer" \
+    #     "/synthesizer_data/grids/"
+    grid_dir = "/cosma/home/dp004/dc-rope1/cosma8/CONTRITE/data/"
     grid = Grid(grid_name, grid_dir=grid_dir)
 
     filter_codes = ["JWST/NIRCam.F090W", "JWST/NIRCam.F150W",
