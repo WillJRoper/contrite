@@ -354,7 +354,7 @@ def create_hypercube(grid, out_path):
     # Define each dimension of the cube
     max_ages = grid.log10ages
     peaks = grid.log10ages
-    taus = np.linspace(0.05, 1, ntau)
+    taus = np.linspace(0.1, 1, ntau)
     metals = grid.log10metallicities
 
     # Set up hypercube object
