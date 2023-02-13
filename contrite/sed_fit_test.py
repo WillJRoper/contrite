@@ -397,7 +397,7 @@ def create_hypercube(grid, out_path):
         Z_p = {'log10Z': metal}
 
         # Should we report what we have done?
-        if ind - rank_bins[rank] % 10000 == 0:
+        if (ind - rank_bins[rank]) % 10000 == 0:
             print("Rank %d done: %d of %d (%.2f)"
                   % (rank, ind - rank_bins[rank],
                      rank_bins[rank + 1] - rank_bins[rank],
