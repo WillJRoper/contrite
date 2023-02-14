@@ -288,7 +288,7 @@ class HyperCube():
         # Populate this cube from the file
         for key in hdf.keys():
             if key == "HyperCube":
-                setattr(self, "cube", hdf[key])
+                setattr(self, "cube", hdf[key][...])
             else:
                 setattr(self, key, hdf[key][...])
         for key in hdf.attrs.keys():
@@ -556,9 +556,9 @@ if __name__ == "__main__":
     # Intialise the Hypercube
     cube_path = sys.argv[1] + "/hypercube_<rank>.hdf5"
 
-    t = time.time()
-    hcube = create_hypercube(grid, cube_path)
-    print("Hypercube creation took:", time.time() - t)
+    # t = time.time()
+    # hcube = create_hypercube(grid, cube_path)
+    # print("Hypercube creation took:", time.time() - t)
 
     if rank == 0:
 
