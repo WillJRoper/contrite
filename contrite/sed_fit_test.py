@@ -22,6 +22,8 @@ from synthesizer.dust import power_law
 from synthesizer.sed import Sed
 from multiprocessing import Pool
 
+from hypercube import create_hypercube, HyperCube
+
 from mpi4py import MPI
 import mpi4py
 import numpy as np
@@ -48,19 +50,19 @@ def logprior(theta, k, grid):
     taus = theta[k: 2 * k]
     metallicity = theta[2 * k: 3 * k]
     masses = theta[3 * k: 4 * k]
-    # max_age = theta[-1]
+    max_age = theta[-1]
 
     lp = 0.
 
     # Uniform priors
     age_min, age_max = grid.log10ages.min(), grid.log10ages.max()
-    tau_min, tau_max = 10**-5, 1
+    tau_min, tau_max = 10**-5, 5
     Zmin, Zmax = grid.log10metallicities.min(), grid.log10metallicities.max()
     mass_min, mass_max = 4, 12
 
     # Set prior to 1 (log prior to 0) if in the range and zero (-inf)
     # outside the range
-    # lp += 0. if age_min < max_age < age_max else -np.inf
+    lp += 0. if age_min < max_age < age_max else -np.inf
     lp += 0. if np.all(np.logical_and(peaks <= age_max, peaks >= age_min)) else -np.inf
     lp += 0. if np.all(np.logical_and(taus <= tau_max, taus >= tau_min)) else -np.inf
     lp += 0. if np.all(np.logical_and(metallicity <= Zmax, metallicity >= Zmin)) else -np.inf
@@ -68,39 +70,53 @@ def logprior(theta, k, grid):
 
     # Extra constraints
 
-    # # The peak must be less than the maximum age
-    # lp += 0. if np.all(peaks < max_age) else -np.inf
+    # The peak must be less than the maximum age
+    lp += 0. if np.all(peaks < max_age) else -np.inf
+
+    # # Penalise the parmaeter set for large differences between max age and
+    # # peak age
+    # lp += np.sum(0.5 * ((peaks - max_age) / 10 ** 6) ** 2)
 
     return lp
+    
 
-
-def loglike(theta, data, sigma, cosmo, filters, k, grid):
+def loglike(theta, data, sigma, cosmo, filters, k, grid, hcube):
     '''The natural logarithm of the likelihood.'''
 
     # Extract fitting parameters
-    peaks = 10 ** theta[: k] * yr
+    peaks = theta[: k]
     taus = theta[k: 2 * k]
     metallicity = theta[2 * k: 3 * k]
-    masses = theta[3 * k: 4 * k]
-    # max_age = 10 ** theta[-1] * yr
+    masses = 10 ** theta[3 * k: 4 * k]
+    z = theta[-1]
 
-    sed, _ = get_spectra(peaks, taus, metallicity, masses, k)
+    sed = hcube.get_hypercube_spectra(k, max_age=max_age, peak=peaks, tau=taus,
+                                      metallicity=metallicity, mass=masses)
+
+    # Compute the luminosity distance
+    luminosity_distance = cosmo.luminosity_distance(
+            z).to('cm').value  # the luminosity distance in cm
+
+    nuz = hcube.nu
 
     # Calculate photometry of the model
-    photm = np.array([f.apply_filter(sed.fnu, sed.nuz) for f in filters])
-
+    if filters is not None:
+        fit = np.array([f.apply_filter(sed, nuz) for f in filters])
+    else:
+        fit = sed
+        
     # return the log likelihood
-    return -0.5 * np.sum(((photm - data) / sigma) ** 2)
+    return -0.5 * np.sum(((fit - data) / sigma) ** 2)
 
 
-def logpost(theta, k, data, sigma, cosmo, filters, grid):
+def logpost(theta, k, data, sigma, cosmo, filters, grid, hcube):
     '''The natural logarithm of the posterior.'''
 
     prior = logprior(theta, k, grid)
 
-    if prior > -np.inf:
+    if np.isfinite(prior):
         lnl = loglike(theta, data, sigma, cosmo,
-                      filters, k, grid)
+                      filters, k, grid, hcube)
         return prior + lnl
     else:
         return -np.inf
@@ -163,7 +179,7 @@ def get_fake_photometry(grid, filters, n):
     ax.set_ylabel('SFR / [M$_\odot$/yr]')
     ax.set_ylim(10**2, 10**8.5)
 
-    total_stellar_mass = np.sum(tot_sfzh.sfh * grid.log10ages)
+    total_stellar_mass = np.trapz(tot_sfzh.sfh, x=10 ** grid.log10ages)
 
     ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.25),
               fancybox=True, shadow=True, ncol=1)
@@ -183,7 +199,8 @@ def get_fake_photometry(grid, filters, n):
     sed = galaxy.get_stellar_spectra(grid)
     sed.get_fnu0()
     print(tot_sfzh)
-    print("log_10(Mass_*/M_sun)=", np.log10(total_stellar_mass))
+    print("log_10(Mass_*/M_sun)=", np.log10(total_stellar_mass),
+          np.log10(10 ** 9 + sum([10 ** m for m in masses])))
     print(np.sum(sed.fnu))
 
     # Calculate photometry of the model
@@ -213,7 +230,7 @@ def get_fake_photometry(grid, filters, n):
 
     return photm, sed
 
-def get_spectra(peaks, taus, metallicity, masses, k):
+def get_spectra(peaks, taus, metallicity, masses, max_age, k):
 
     tot_sfzh = None
 
@@ -221,7 +238,7 @@ def get_spectra(peaks, taus, metallicity, masses, k):
     for ind in range(k):
         
         sfh_props = {'peak_age': peaks[ind], "tau": taus[ind],
-                     "max_age": peaks[ind] + 10 * Myr}
+                     "max_age": max_age}
         Z_p = {'log10Z': metallicity[ind]}
         stellar_mass = 10 ** masses[ind]
         
@@ -252,312 +269,47 @@ def get_spectra(peaks, taus, metallicity, masses, k):
     return sed, tot_sfzh
 
 
-class HyperCube():
-
-    def __init__(self, props=None, lam=None, cube_path=None):
-
-        # Are we making new grid or reading an existing one?
-        if cube_path is not None:
-            self.load_hypercube(cube_path)
-        else:
-
-            self.ndim = len(props) + 1
-
-            self.props = props
-            for name, prop in props.items():
-                setattr(self, name, prop)
-                
-            self.lam = lam
-
-        # Define an attribute to store the hdf5 object 
-        self.hdf = None
-
-    def get_value(self):
-
-        grid_tup = [slice(None)] * self.ndim
-
-        grid_tup = tuple(grid_tup)
-
-        return cube[gird_tup]
-
-    def load_hypercube(self, cube_path):
-
-        # Open the file
-        hdf = h5py.File(cube_path, "r")
-
-        # Populate this cube from the file
-        for key in hdf.keys():
-            if key == "HyperCube":
-                setattr(self, "cube", hdf[key][...])
-            else:
-                setattr(self, key, hdf[key][...])
-        for key in hdf.attrs.keys():
-            setattr(self, key, hdf.attrs[key])
-
-    # def write_hypercube(self, cube_path):
-
-    #     # Create the HDF5 file
-    #     hdf = h5py.File(cube_path, "w")
-
-    #     # Get the attributes of the cube
-    #     attrs = [a for a in dir(obj) if not a.startswith('__')
-    #              and not callable(getattr(obj, a))]
-
-    #     # Store the cube as a dataset
-    #     for a in attrs:
-    #         arr = getattr(self, a)
-    #         if isinstance(arr, np.ndarray):
-    #             hdf.create_dataset(a, data=arr, dtype=arr.dtype,
-    #                                shape=arr.shape, compression="gzip")
-    #         else:
-    #             hdf.attrs[a] = arr
-
-    #     hdf.close
-
-
-    def plot_dist(self):
-
-        # Set up figure
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
-
-        for i, max_age in enumerate(self.max_age):
-            print("Currently plotting for log_10(max_age)=%.2f" % max_age)
-            for j, peak in enumerate(self.peak):
-
-                # Skip peaks beyond the max age
-                if peak >= max_age:
-                    continue
-            
-                for k, tau in enumerate(self.tau):
-                    for l, metal in enumerate(self.metallicity):
-
-                        ax.plot(self.lam, self.cube[i, j, k, l, :], alpha=0.1,
-                                color="k")
-
-        ax.set_xlabel('$\lambda / [\AA]$')
-        ax.set_ylabel('$F_{\mathrm{nu}}/$ [nJy]')
-    
-        fig.savefig("hypercube_spectra.png", bbox_inches="tight", dpi=100)
-        plt.close(fig)
-        
-
-def create_hypercube(grid, out_path):
-
-    # Get useful constants
-    nlam = grid.lam.size
-    nZ = grid.log10metallicities.size
-    nage = grid.log10ages.size
-    ntau = 50
-
-    # Note: this structure is (max_age, peaks, taus, Zs, wavelength)
-
-    # Define each dimension of the cube
-    max_ages = grid.log10ages
-    peaks = grid.log10ages
-    taus = np.linspace(0.1, 1, ntau)
-    metals = grid.log10metallicities
-
-    # Set up hypercube object
-    props  = {"max_age": max_ages, "peak": peaks, "tau": taus,
-              "metallicity": metals}
-    hcube = HyperCube(props=props, lam=grid.lam)
-
-    # # Create the list of parameters that describe the hypercube ready for
-    # # parallelising
-    # params = []
-    # for i, max_age in enumerate(max_ages):
-    #     for j, peak in enumerate(peaks):
-
-    #         # Skip peaks beyond the max age
-    #         if peak >= max_age:
-    #             continue
-            
-    #         for k, tau in enumerate(taus):
-    #             for l, metal in enumerate(metals):
-
-    #                 params.append([(i, j, k, l), (max_age, peak, tau, metal)])
-
-    # # Get the range for each rank
-    # if rank == 0:
-    #     print("Distributing %d spectra over %d ranks" % (len(params), nranks))
-    # rank_bins = np.linspace(0, len(params), nranks + 1, dtype=int)
-
-    # # Get this ranks indices
-    # my_inds = np.arange(rank_bins[rank], rank_bins[rank + 1], 1, dtype=int)
-
-    # # Loop over parameters making SEDs
-    # spectra = []
-    # for ind in my_inds:
-
-    #     (i, j, k, l), (max_age, peak, tau, metal) = params[ind]
-
-    #     sfh_props = {'peak_age': 10 ** peak * Myr, "tau": tau,
-    #                  "max_age": 10 ** max_age * Myr}
-    #     Z_p = {'log10Z': metal}
-
-    #     # Should we report what we have done?
-    #     if (ind - rank_bins[rank]) % 10000 == 0:
-    #         print("Rank %d done: %d of %d (%.2f)"
-    #               % (rank, ind - rank_bins[rank],
-    #                  rank_bins[rank + 1] - rank_bins[rank],
-    #                  (ind - rank_bins[rank]) /
-    #                  (rank_bins[rank + 1] - rank_bins[rank]) * 100) + "%")
-
-    #     # Define the functional form of the star formation and
-    #     # metal enrichment histories
-    #     sfh = SFH.LogNormal(sfh_props)
-        
-    #     # Constant metallicity
-    #     Zh = ZH.deltaConstant(Z_p)
-                    
-    #     # Get the 2D star formation and metal enrichment history
-    #     # for the given SPS grid. This is (age, Z).
-    #     sfzh = generate_sfzh(grid.log10ages, grid.metallicities,
-    #                          sfh, Zh, stellar_mass=1.0)
-        
-    #     # Make a galaxy from this SFZH
-    #     galaxy = Galaxy(sfzh)
-                    
-    #     # Compute SED
-    #     sed = galaxy.get_stellar_spectra(grid)
-    #     sed.get_fnu0()
-
-    #     # Store the results
-    #     spectra.append([(i, j, k, l), (max_age, peak, tau, metal),
-    #                     np.float32(sed._fnu)])
-
-    # print("Rank %d finished %d spectra"
-    #       % (rank, rank_bins[rank + 1] - rank_bins[rank]))
-
-    # # Create the HDF5 file
-    # hdf = h5py.File(cube_path.replace("<rank>", str(rank)), "w")
-
-    # # Write out this ranks results
-    # for spec_lst in spectra:
-
-    #     # Extract the contents
-    #     (i, j, k, l), (max_age, peak, tau, metal), spec = spec_lst
-
-    #     # Make a group for this spectra
-    #     hdf.create_dataset("%d_%d_%d_%d" % (i, j, k, l),
-    #                        data=spec, dtype=spec.dtype,
-    #                        shape=spec.shape, compression="gzip")
-
-    # hdf.close()
-
-    comm.barrier()
-
-    if rank == 0:
-
-        # Create a single file with a virtual dataset
-        # NOTE: only works for h5py>=2.9
-        hdf = h5py.File(cube_path.replace("_<rank>", ""), "w")
-
-        # Get the attributes of the cube
-        attrs = [a for a in dir(hcube) if not a.startswith('__')
-                 and not callable(getattr(hcube, a))]
-
-        # Store the cube as a dataset
-        for a in attrs:
-            if a == "hdf" or a == "props":
-                continue
-            arr = getattr(hcube, a)
-            print("Writing:", a)
-            if isinstance(arr, np.ndarray):
-                hdf.create_dataset(a, data=arr, dtype=arr.dtype,
-                                   shape=arr.shape, compression="gzip")
-            else:
-                hdf.attrs[a] = arr
-
-        # Create the virtual dataset for the cube
-        virtual_cube = h5py.VirtualLayout(shape=(nage, nage, ntau, nZ, nlam),
-                                          dtype=np.float32)
-
-        # Loop over rank files and include their spectra in the virtual cube
-        for r in range(nranks):
-
-            # Open the HDF5 file
-            rank_hdf = h5py.File(cube_path.replace("<rank>", str(r)), "r")
-
-            # Loop over datasets converting them to virtual sources
-            for key in rank_hdf.keys():
-                print(key)
-                i, j, k, l = key.split("_")
-                i = int(i)
-                j = int(j)
-                k = int(k)
-                l = int(l)
-                virtual_spectra = h5py.VirtualSource(rank_hdf[key])
-                virtual_cube[i, j, k, l, :] = virtual_spectra
-
-        # Store the hypercube in the master file
-        hdf.create_virtual_dataset('HyperCube', virtual_cube, fillvalue=-5)
-
-        hdf.close()
-
-    # # Loop over cube dimensions populating SEDs
-    # for i, max_age in enumerate(max_ages):
-    #     print("Computing spectra for log10(max_age)[%d]=%.2f" % (i, max_age))
-    #     for j, peak in enumerate(peaks):
-
-    #         # Skip peaks beyond the max age
-    #         if peak > max_age:
-    #             continue
-            
-    #         for k, tau in enumerate(taus):
-    #             for l, metal in enumerate(metals):
-                    
-    #                 sfh_props = {'peak_age': 10 ** peak * Myr, "tau": tau,
-    #                              "max_age": 10 ** max_age * Myr}
-    #                 Z_p = {'log10Z': metal}
-
-    #                 # Define the functional form of the star formation and
-    #                 # metal enrichment histories
-    #                 sfh = SFH.LogNormal(sfh_props)
-
-    #                 # Constant metallicity
-    #                 Zh = ZH.deltaConstant(Z_p)
-                    
-    #                 # Get the 2D star formation and metal enrichment history
-    #                 # for the given SPS grid. This is (age, Z).
-    #                 sfzh = generate_sfzh(grid.log10ages, grid.metallicities,
-    #                                      sfh, Zh, stellar_mass=1.0)
-
-    #                 # Make a galaxy from this SFZH
-    #                 galaxy = Galaxy(sfzh)
-
-    #                 # Compute SED
-    #                 sed = galaxy.get_stellar_spectra(grid)
-    #                 sed.get_fnu0()
-
-    #                 # Store this spectra
-    #                 hcube.cube[i, j, k, l, :] = sed.fnu
-    
-    return hcube
-
-
 if __name__ == "__main__":
 
     # Define the grid
     grid_name = "bc03_chabrier03-0.1,100"
-    # grid_dir = "/Users/willroper/Documents/University/Synthesizer" \
-    #     "/synthesizer_data/grids/"
-    grid_dir = "/cosma/home/dp004/dc-rope1/cosma8/CONTRITE/data/"
+    grid_dir = "/Users/willroper/Documents/University/Synthesizer" \
+        "/synthesizer_data/grids/"
+    # grid_dir = "/cosma/home/dp004/dc-rope1/cosma8/CONTRITE/data/"
     grid = Grid(grid_name, grid_dir=grid_dir)
 
-    # if rank == 0:
-    #     filter_codes = ["JWST/NIRCam.F090W", "JWST/NIRCam.F150W",
-    #                     "JWST/NIRCam.F200W", "JWST/NIRCam.F277W",
-    #                     "JWST/NIRCam.F444W"]
-    #     filters = Filters(filter_codes=filter_codes, new_lam=grid.lam)
-    #     photm, true_sed = get_fake_photometry(grid, filters, n=10)
+    if rank == 0:
+        filter_codes = ["HST/WFC3_UVIS1.F218W", "HST/WFC3_UVIS1.F390W",
+                        "HST/WFC3_UVIS2.F438W", "HST/WFC3_UVIS2.F555W",
+                        "JWST/NIRCam.F090W", "JWST/NIRCam.F150W",
+                        "JWST/NIRCam.F200W", "JWST/NIRCam.F277W",
+                        "JWST/NIRCam.F444W"]
+        filters = Filters(filter_codes=filter_codes, new_lam=grid.lam)
+        photm, true_sed = get_fake_photometry(grid, filters, n=2)
 
     # Intialise the Hypercube
     cube_path = sys.argv[1] + "/hypercube_<rank>.hdf5"
 
+    # Define the hypercube dimensions
+    dims = {"max_age": 50, "peak": 50, "tau": 50, "metallicity": 6,
+            "wavelength": grid.lam.size}
+
+    # Define each dimension of the cube
+    max_ages = np.linspace(grid.log10ages[0], grid.log10ages[-1],
+                           dims["max_age"])
+    peaks = np.linspace(grid.log10ages[0], grid.log10ages[-1], dims["peak"])
+    taus = np.linspace(10**-5, 5, dims["tau"])
+    metals = np.linspace(grid.log10metallicities[0],
+                         grid.log10metallicities[-1], dims["metallicity"])
+
+    # Set up hypercube object
+    props  = {"max_age": max_ages, "peak": peaks, "tau": taus,
+              "metallicity": metals}
+    prop_names = tuple(props.keys())
+
     # t = time.time()
-    # hcube = create_hypercube(grid, cube_path)
+    # hcube = create_hypercube(grid, props, prop_names, dims, cube_path,
+    #                          rank, nranks, comm)
     # print("Hypercube creation took:", time.time() - t)
 
     if rank == 0:
@@ -566,32 +318,35 @@ if __name__ == "__main__":
         cube_path = sys.argv[1] + "/hypercube.hdf5"
         
         t = time.time()
-        hcube = HyperCube(cube_path=cube_path)
+        hcube = HyperCube(prop_names=prop_names, cube_path=cube_path)
         print("Hypercube reading took:", time.time() - t)
 
-        hcube.plot_dist()
+        # hcube.plot_dist()
 
-        k = 2
+        k = 1
         
         # Define the number of elements in each dimension
-        dims = np.array([k, k, k, k])
+        dims = np.array([k, k, k, k, 1])
 
         ndim = np.sum(dims)  # Number of parameters/dimensions
         # Number of walkers to use. It should be at least twice the number of dimensions.
-        nwalkers = 20
-        nsteps = 500  # Number of steps/iterations.
+        nwalkers = 100
+        nsteps = 2000  # Number of steps/iterations.
     
         # Initial positions of the walkers.
         print(grid.log10ages.min(), grid.log10ages.max())
         print(grid.log10metallicities.min(), grid.log10metallicities.max())
         start = np.zeros((nwalkers, ndim))
-        start[:, : k] = np.log10((50 * Myr).to(yr).value)
         start[:, k: 2 * k] = 0.5
         start[:, 2 * k: 3 * k] = -2
         start[:, 3 * k: 4 * k] = 9
+        start[:, -1] = 8
         print(np.min(start, axis=0))
         print(np.max(start, axis=0))
-        start[:, : k] += start[:, : k] * np.random.uniform(-0.2, 0.2, (nwalkers, k))
+        start[:, -1] += start[:, -1] * np.random.uniform(-0.2, 0.2, nwalkers)
+        for i in range(k):
+            start[:, i] = start[:, -1]
+        start[:, : k] -= start[:, -1][:, None] * np.random.uniform(0, 0.2, (nwalkers, k))
         start[:, k: 2 * k] += start[:, k: 2 * k] * np.random.uniform(-0.2, 0.2, (nwalkers, k))
         start[:, 2 * k: 3 * k] += start[:, 2 * k: 3 * k] * np.random.uniform(-0.2, 0.2, (nwalkers, k))
         start[:, 3 * k: 4 * k] += start[:, 3 * k: 4 * k] * np.random.uniform(-0.2, 0.2, (nwalkers, k))
@@ -600,88 +355,116 @@ if __name__ == "__main__":
         print(np.max(start, axis=0))
         
         t = time.time()
-        prob = loglike(start[0, :], photm, 0.1, cosmo, filters, k, grid)
+        prob = loglike(start[0, :], photm, photm * 0.1, cosmo, filters, k, grid, hcube)
         print("Test gave P=%.2e and took %.4f s" % (prob, time.time() - t))
-
-        hcube.hdf.close()
-
-    # Read the cube back in
     
-    # sampler = zeus.EnsembleSampler(nwalkers, ndim, logpost,
-    #                                args=[k, photm, 10**27, cosmo, filters, grid],
-    #                                maxiter=10**4)
+        sampler = zeus.EnsembleSampler(
+            nwalkers, ndim, logpost,
+            args=[k, true_sed._fnu, true_sed._fnu * 0.1, cosmo, None, grid, hcube],
+            maxiter=10**4)
 
-    # # Run MCMC
-    # sampler.run_mcmc(start, nsteps)
+        # Run MCMC
+        sampler.run_mcmc(start, nsteps)
 
-    # # Initialise the sampler
-    # sampler.summary  # Print summary diagnostics
+        # Get the burnin samples
+        burnin = sampler.get_chain()
 
-    # # Make labels
-    # labels = np.zeros(ndim, dtype=object)
-    # labels[:k] = ["peak_age_%d" % i for i in range(k)]
-    # labels[k: 2 * k] = ["$\tau_%d$" % i for i in range(k)]
-    # labels[2 * k: 3 * k] = ["$Z_%d$" % i for i in range(k)]
-    # labels[3 * k: 4 * k] = ["$M_{\star,%d}$" % i for i in range(k)]
+        # Set the new starting positions of walkers based on their last positions
+        start = burnin[-1]
 
-    # # Plot the walkers
-    # plt.figure(figsize=(16, 1.5 * ndim))
-    # for n in range(ndim):
-    #     plt.subplot2grid((ndim, 1), (n, 0))
-    #     plt.plot(sampler.get_chain()[:,:,0], alpha=0.5)
-    #     plt.ylabel(labels[n])
-    # plt.tight_layout()
-    # plt.savefig("../walkers.png", bbox_inches="tight", dpi=100)
-    # plt.close()
+        sampler = zeus.EnsembleSampler(
+            nwalkers, ndim, logpost,
+            args=[k, true_sed._fnu, true_sed._fnu * 0.1, cosmo, None, grid, hcube],
+            maxiter=10**4, moves=zeus.moves.GlobalMove())
 
-    # # Flatten the chains, thin them by a factor of 10, and remove the burn-in
-    # # (first half of the chain)
-    # chain = sampler.get_chain(flat=True, discard=50, thin=10)
+        # Run MCMC
+        sampler.run_mcmc(start, nsteps)
 
-    # # Plot marginal posterior distributions
-    # fig, axes = zeus.cornerplot(chain, labels=labels)
-    # fig.savefig("../corner_plot.png", bbox_inches="tight", dpi=100)
-    # plt.close(fig)
+        # Initialise the sampler
+        sampler.summary  # Print summary diagnostics
 
-    # # Get median parameters
-    # chain = sampler.get_chain(flat=False, discard=50, thin=10)
-    # fit_params = np.median(chain, axis=0)
+        # Make labels
+        labels = np.zeros(ndim, dtype=object)
+        labels[:k] = ["peak_age_%d" % i for i in range(k)]
+        labels[k: 2 * k] = [r"$\tau_%d$" % i for i in range(k)]
+        labels[2 * k: 3 * k] = ["$Z_%d$" % i for i in range(k)]
+        labels[3 * k: 4 * k] = ["$M_{\star,%d}$" % i for i in range(k)]
+        labels[-1] = "max_age"
+        
+        # Plot the walkers
+        plt.figure(figsize=(16, 1.5 * ndim))
+        for n in range(ndim):
+            plt.subplot2grid((ndim, 1), (n, 0))
+            plt.plot(sampler.get_chain()[:,:,n], alpha=0.1)
+            plt.ylabel(labels[n])
+        plt.tight_layout()
+        plt.savefig("../walkers.png", bbox_inches="tight", dpi=100)
+        plt.close()
 
-    # # Get the fit
-    # fit_sed, fit_sfzh = get_spectra(fit_params[:k] * yr, fit_params[k: 2 * k],
-    #                                 fit_params[2 * k: 3 * k],
-    #                                 fit_params[3 * k: 4 * k], k)
+        # Flatten the chains, thin them by a factor of 10, and remove the burn-in
+        # (first half of the chain)
+        chain = sampler.get_chain(flat=True, discard=50, thin=10)
+
+        # Plot marginal posterior distributions
+        fig, axes = zeus.cornerplot(chain, labels=labels)
+        fig.savefig("../corner_plot.png", bbox_inches="tight", dpi=100)
+        plt.close(fig)
+
+        # Get median parameters
+        fit_params = np.median(chain, axis=0)
+
+        print("Fit parameters:", fit_params)
     
-    # # Set up plot
-    # fig = plt.figure(figsize=(6, 3))
-    # ax = fig.add_subplot(111)
-    # ax.grid(True)
+        # Get the fit
+        fit_sed, fit_sfzh = get_spectra(10 ** fit_params[:k] * yr,
+                                        fit_params[k: 2 * k],
+                                        fit_params[2 * k: 3 * k],
+                                        fit_params[3 * k: 4 * k],
+                                        10 ** fit_params[-1] * yr,
+                                        k)
 
-    # for i in range(chain.shape[0]):
-    #     sed, _ = get_spectra(chain[i, :k] * yr,
-    #                          chain[i, k: 2 * k],
-    #                          chain[i, 2 * k: 3 * k],
-    #                          chain[i, 3 * k: 4 * k], k)
-    #     ax.loglog(true_sed.lamz, sed.fnu, color="k", alpha=0.3)
+        print(np.sum(fit_sed.fnu))
     
-    # ax.loglog(true_sed.lamz, true_sed.fnu, color="g",
-    #           linestyle="--", label="Truth")
-    # ax.loglog(true_sed.lamz, fit_sed.fnu, color="c", label="Fit")
-    # ax.set_ylim(10**26., None)
-    # ax.set_xlim(10**2, 10**6)
-
-    # ax.set_xlabel('$\lambda / [\AA]$')
-    # ax.set_ylabel('$F_{\mathrm{nu}}/$ [nJy]')
-
-    # ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.25),
-    #           fancybox=True, shadow=True, ncol=2)
+        # Set up plot
+        fig = plt.figure(figsize=(6, 3))
+        gs = fig.add_gridspec(nrows=2, ncols=1, wspace=0.0, hspace=0.0,
+                              height_ratios=[4, 2])
+        ax = fig.add_subplot(gs[0])
+        ax1 = fig.add_subplot(gs[1])
+        ax.grid(True)
+        ax1.grid(True)
+        
+        for i in range(chain.shape[0]):
+            sed, _ = get_spectra(10 ** chain[i, :k] * yr,
+                                 chain[i, k: 2 * k],
+                                 chain[i, 2 * k: 3 * k],
+                                 chain[i, 3 * k: 4 * k],
+                                 10 ** chain[i, -1] * yr, k)
+            ax.loglog(true_sed.lamz, sed._fnu, color="k", alpha=0.3)
     
-    # fig.savefig("../fit_sed_test.png", bbox_inches="tight", dpi=100)
-    # plt.close(fig)
+        ax.loglog(true_sed.lamz, true_sed.fnu, color="g",
+                  linestyle="--", label="Truth")
+        ax.loglog(true_sed.lamz, fit_sed._fnu, color="c", label="Fit")
+        ax1.semilogx(true_sed.lamz,
+                     (fit_sed._fnu - true_sed._fnu) / true_sed._fnu)
+        ax.set_ylim(10**26., None)
 
-    # fig1, ax1 = fit_sfzh.plot(show=False)
+        ax1.set_xlabel('$\lambda / [\AA]$')
+        ax.set_ylabel('$F_{\mathrm{nu}}/$ [nJy]')
+        ax1.set_ylabel('$F_{\mathrm{Fit}} / F_{\mathrm{Truth}} - 1$')
+
+        handles, leg_labels = ax.get_legend_handles_labels() 
+
+        ax1.legend(handles, leg_labels,
+                   loc='upper center', bbox_to_anchor=(0.5, -0.25),
+                   fancybox=True, shadow=True, ncol=2)
     
-    # fig1.savefig("../fit_SFHZ_test.png")
-    # plt.close(fig1)
+        fig.savefig("../fit_sed_test.png", bbox_inches="tight", dpi=100)
+        plt.close(fig)
+
+        fig1, ax1 = fit_sfzh.plot(show=False)
+        
+        fig1.savefig("../fit_SFHZ_test.png")
+        plt.close(fig1)
 
     
